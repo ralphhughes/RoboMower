@@ -1,0 +1,29 @@
+#include <Wire.h>   // I2C lib is required for lolin motor to work
+#include <LOLIN_I2C_MOTOR.h>
+
+LOLIN_I2C_MOTOR motorShield; //I2C address 0x30
+
+setup {
+
+        while (motorShield.PRODUCT_ID != PRODUCT_ID_I2C_MOTOR) { //wait until motor shield ready.
+            motorShield.getInfo();
+        }
+        motorShield.changeFreq(MOTOR_CH_BOTH, 7500); //Change A & B 's Frequency to 7.5kHz to match NXT freq.
+
+}
+
+loop {
+stuff deleted
+             motorShield.changeDuty(MOTOR_CH_B, Output); // Duty cycle as a %
+             motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_CCW);
+           } else if (Output < -motorDeadband) {
+             motorShield.changeDuty(MOTOR_CH_B, -Output); // Duty cycle as a %
+             motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_CW);
+           } else {
+             motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_SHORT_BRAKE);  
+           }
+        
+       }
+
+
+}

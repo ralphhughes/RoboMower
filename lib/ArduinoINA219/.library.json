@@ -1,0 +1,72 @@
+{
+    "description": "INA219 hi-side i2c current/power sensor Library", 
+    "repository": {
+        "url": "https://github.com/flav1972/ArduinoINA219", 
+        "type": "git"
+    }, 
+    "platforms": [
+        "atmelavr", 
+        "atmelmegaavr", 
+        "atmelsam", 
+        "espressif32", 
+        "espressif8266", 
+        "gd32v", 
+        "infineonxmc", 
+        "intel_arc32", 
+        "kendryte210", 
+        "microchippic32", 
+        "nordicnrf51", 
+        "nordicnrf52", 
+        "ststm32", 
+        "ststm8", 
+        "teensy", 
+        "timsp430"
+    ], 
+    "export": {
+        "exclude": [
+            "extras", 
+            "docs", 
+            "tests", 
+            "test", 
+            "*.doxyfile", 
+            "*.pdf"
+        ], 
+        "include": null
+    }, 
+    "authors": [
+        {
+            "maintainer": false, 
+            "name": "DeCristofaro John", 
+            "url": null, 
+            "email": "johngineer@yahoo.com"
+        }, 
+        {
+            "maintainer": false, 
+            "name": "Jukka-Pekka Sarjanen", 
+            "url": null, 
+            "email": "jukka-Pekka.sarjanen@kone.com"
+        }, 
+        {
+            "maintainer": false, 
+            "name": "gandy92", 
+            "url": null, 
+            "email": "gandy92@googlemail.com"
+        }, 
+        {
+            "maintainer": true, 
+            "name": "Flavius Bindea", 
+            "url": null, 
+            "email": "flav@flav.com"
+        }
+    ], 
+    "keywords": [
+        "sensors"
+    ], 
+    "id": 411, 
+    "name": "ArduinoINA219", 
+    "frameworks": [
+        "arduino"
+    ], 
+    "version": "1.0.4", 
+    "homepage": null
+}

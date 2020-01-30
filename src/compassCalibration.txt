@@ -1,0 +1,44 @@
+int minX, minY, minZ;
+int maxX, maxY, maxZ;
+
+void setup() {
+
+}
+void loop () {
+    int rawX, rawY, rawZ;
+    int azimuth;
+    int err = qmc.read(rawX, rawY, rawZ, azimuth);
+    if (err != 0) {
+        Serial.print("Error: ");
+        Serial.println(err);
+    } else {
+        if (rawX < minX) minX = rawX;
+        if (rawX > maxX) maxX = rawX;
+        if (rawY < minY) minY = rawY;
+        if (rawY > maxY) maxY = rawY;
+        if (rawZ < minZ) minZ = rawZ;
+        if (rawZ > maxZ) maxZ = rawZ;
+
+        Serial.print("x: ");
+        Serial.print(rawX);
+        Serial.print("\ty: ");
+        Serial.print(rawY);
+        Serial.print("\tz: ");
+        Serial.print(rawZ);
+        Serial.print("\tminX=");
+        Serial.print(minX);
+        Serial.print(";\tminY=");
+        Serial.print(minY);
+        Serial.print(";\tminZ=");
+        Serial.print(minZ);
+        Serial.print(";\tmaxX=");
+        Serial.print(maxX);
+        Serial.print(";\tmaxY=");
+        Serial.print(maxY);
+        Serial.print(";\tmaxZ=");
+        Serial.print(maxZ);
+        Serial.println();
+    }
+
+}
+

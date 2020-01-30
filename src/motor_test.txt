@@ -1,0 +1,98 @@
+
+/*
+ESP8266 Blink
+Blink the blue LED on the ESP8266 module
+*/
+#include "Arduino.h"
+#include "ESP8266WiFi.h"
+#include <Wire.h>
+#include <LOLIN_I2C_MOTOR.h>
+
+#ifndef LED_BUILTIN
+#define LED_BUILTIN 13
+#endif
+/*
+  Simple Motor Shield Test.
+*/
+
+
+LOLIN_I2C_MOTOR motorShield; //I2C address 0x30
+// LOLIN_I2C_MOTOR motor(DEFAULT_I2C_MOTOR_ADDRESS); //I2C address 0x30
+// LOLIN_I2C_MOTOR motor(your_address); //using customize I2C address
+
+void setup_disabled()
+{
+  Serial.begin(115200);
+  Serial.println("Motor Shield Testing...");
+
+  while (motorShield.PRODUCT_ID != PRODUCT_ID_I2C_MOTOR) //wait motor shield ready.
+  {
+    motorShield.getInfo();
+  }
+}
+
+void loop_disabled()
+{
+  Serial.println("Change A to CCW, B to CW, Freq: 1000Hz");
+  Serial.println("Duty Tesing...");
+
+  motorShield.changeFreq(MOTOR_CH_BOTH, 1000); //Change A & B 's Frequency to 1000Hz.
+  /*
+      motor.changeFreq(MOTOR_CH_A, 1000);//Change A 's Frequency to 1000Hz.
+      motor.changeFreq(MOTOR_CH_B, 2000);//Change B 's Frequency to 2000Hz.
+  */
+  motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_CCW);
+  motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_CW);
+
+  for (float duty = 0; duty <= 100; duty++)
+  {
+    motorShield.changeDuty(MOTOR_CH_A, duty);
+    motorShield.changeDuty(MOTOR_CH_B, 100 - duty);
+
+    Serial.print("Change A Duty to ");
+    Serial.print(duty);
+    Serial.println("%");
+
+    Serial.print("Change B Duty to ");
+    Serial.print(100 - duty);
+    Serial.println("%");
+
+    delay(100);
+  }
+
+  Serial.println("STANDBY Tesing...");
+  motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_CCW);
+  motorShield.changeDuty(MOTOR_CH_BOTH, 100);
+  for (int i = 0; i < 5; i++)
+  {
+    Serial.println("MOTOR_STATUS_STANDBY");
+    motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_STANDBY);
+    delay(500);
+    Serial.println("MOTOR_STATUS_CW");
+    motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_CW);
+    delay(500);
+    Serial.println("MOTOR_STATUS_STANDBY");
+    motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_STANDBY);
+    delay(500);
+    Serial.println("MOTOR_STATUS_CCW");
+    motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_CCW);
+    delay(500);
+  }
+
+  Serial.println("MOTOR_STATUS Tesing...");
+  for (int i = 0; i < 5; i++)
+  {
+    Serial.println("MOTOR_STATUS_STOP");
+    motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_STOP);
+    delay(500);
+    Serial.println("MOTOR_STATUS_CCW");
+    motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_CCW);
+    delay(500);
+    Serial.println("MOTOR_SHORT_BRAKE");
+    motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_SHORT_BRAKE);
+    delay(500);
+    Serial.println("MOTOR_STATUS_CW");
+    motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_CW);
+    delay(500);
+  }
+}
