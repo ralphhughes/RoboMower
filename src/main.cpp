@@ -6,7 +6,7 @@ void i2cScan();
 
 // For testing when not everything is connected:
 #define COMPASS_ENABLED true
-#define INA219_ENABLED false
+#define INA219_ENABLED true
 #define MOTOR_DRIVER_ENABLED true
 #define SONAR_ENABLED true
 #define WIFI_ENABLED true
@@ -35,6 +35,8 @@ int LEFT_SONAR_PIN = D3;
 int RIGHT_SONAR_PIN = D6;
 
 // State machine for mower functions
+String stateLabels[] = {"CALIBRATE_COMPASS","IDLE","MOWING","TURN_LEFT","TURN_RIGHT","EMERG_STOP"};
+
 enum STATES {
     CALIBRATE_COMPASS,
     IDLE,
@@ -43,7 +45,16 @@ enum STATES {
     TURN_RIGHT,
     EMERG_STOP
 };
-int currentState;
+
+// Globals (with default erroneous values)
+int currentState = IDLE;
+float currentHeading = -1.0f;
+float previousHeading = -1.0f;
+unsigned long leftDist = 0;
+unsigned long rightDist = 0;
+float busvoltage = 0;
+float current_mA = 0;
+float power_mW = 0;
 
 // Wifi
 #if WIFI_ENABLED
@@ -66,8 +77,7 @@ int currentState;
     MechaQMC5883 compass;
     float magneticDeclination;
     float getTrueHeading();
-    float currentHeading = -1.0f;
-    float previousHeading = -1.0f;
+    float differenceBetweenAngles(float angle1, float angle2);
 #endif
     
 #if INA219_ENABLED
@@ -85,7 +95,7 @@ int currentState;
 
 // Serial
 char receivedChar;
-boolean newData = false;
+boolean newSerialData = false;
 void recvOneChar();
 void showNewData();
 
@@ -138,9 +148,25 @@ void setup() {
 
         server.on("/", []() {
             String message = "Status\n\n";
-            message += "currentState: "; message += currentState; message += "\n";
-            message += "currentHeading: "; message += currentHeading; message += "\n";
+            message += "currentState: ";    message += stateLabels[currentState];    message += "\n";
+            message += "busVoltage: ";      message += busvoltage;      message += "\n";
+            message += "power_mW: ";        message += power_mW;        message += "\n";
+            message += "leftDist: ";        message += leftDist;        message += "\n";
+            message += "rightDist: ";       message += rightDist;       message += "\n";
+            message += "previousHeading: "; message += previousHeading; message += "\n";
+            message += "currentHeading: ";  message += currentHeading;  message += "\n";
+            
             server.send(200, "text/plain", message);
+        });
+        
+        server.on("/stop", []() {
+            currentState = EMERG_STOP;
+            server.send(200, "text/plain", "Stop signal received.");
+        });
+        
+        server.on("/mow", []() {
+            currentState = MOWING;
+            server.send(200, "text/plain", "Will start mowing.");
         });
         
         server.begin();
@@ -171,10 +197,10 @@ void setup() {
     // Start setup motor shield
     #if MOTOR_DRIVER_ENABLED
         while (motorShield.PRODUCT_ID != PRODUCT_ID_I2C_MOTOR) { //wait until motor shield ready.
-            Serial.print("motorShield.getInfo(): ");
-            Serial.println(motorShield.getInfo()); // Coming back as 0 instead of 2, despite I2C detection?
-            Serial.print("Waiting for '2': ");
-            Serial.println(motorShield.PRODUCT_ID);
+            //Serial.print("motorShield.getInfo(): ");
+            Serial.println(motorShield.getInfo()); // This is NOT the same as PRODUCT_ID
+            //Serial.print("Waiting for '2': ");
+            //Serial.println(motorShield.PRODUCT_ID);
         }
         motorShield.changeFreq(MOTOR_CH_BOTH, 7500); //Change A & B 's Frequency to 7.5kHz to match NXT freq.
         pinMode(intPinMotorA, INPUT);
@@ -191,125 +217,70 @@ void setup() {
 }
 
 void loop() {
-    delay(200);
+    delay(200); // Why? For debug?
+    
+    // Things that need to run in the background
     #if WIFI_ENABLED
         server.handleClient();
         MDNS.update();
     #endif
+    // USB Serial is always enabled
+    recvOneChar();
 
+        
+    // Get values from sensors
     #if SONAR_ENABLED
-        unsigned long leftDist = leftSonar.ping_cm();
+        leftDist = leftSonar.ping_cm();
         delay(29); // 29ms should be the shortest delay between pings.
-        unsigned long rightDist = rightSonar.ping_cm();
+        rightDist = rightSonar.ping_cm();
         Serial.print("Left: ");
         Serial.print(leftDist);
         Serial.print("cm\tRight: ");
         Serial.print(rightDist);
         Serial.println("cm");
-
-        
-        if (leftDist > 0 && leftDist < 20) {
-            if (currentState == MOWING) {
-                previousHeading = currentHeading;
-                currentState = TURN_RIGHT;
-            } else {
-                currentState = EMERG_STOP;
-            }
-        }
-        if (rightDist > 0 && rightDist < 20) {
-            if (currentState == MOWING) {
-                previousHeading = currentHeading;
-                currentState = TURN_LEFT;
-            } else {
-                currentState = EMERG_STOP;
-            }
-        }
-        
-        
     #endif
     #if INA219_ENABLED
         float shuntvoltage = 0;
-        float busvoltage = 0;
-        float current_mA = 0;
-        float loadvoltage = 0;
-        float power_mW = 0;
+        //float busvoltage = 0;
+        //float current_mA = 0;
+        //float loadvoltage = 0;
+        //float power_mW = 0;
 
         shuntvoltage = ina219.getShuntVoltage_mV();
         busvoltage = ina219.getBusVoltage_V();
         current_mA = ina219.getCurrent_mA();
         power_mW = ina219.getPower_mW();
-        loadvoltage = busvoltage + (shuntvoltage / 1000);
+        //loadvoltage = busvoltage + (shuntvoltage / 1000);
 
-        Serial.print("Bus Voltage:   "); Serial.print(busvoltage); Serial.println(" V");
-        Serial.print("Shunt Voltage: "); Serial.print(shuntvoltage); Serial.println(" mV");
-        Serial.print("Load Voltage:  "); Serial.print(loadvoltage); Serial.println(" V");
-        Serial.print("Current:       "); Serial.print(current_mA); Serial.println(" mA");
-        Serial.print("Power:         "); Serial.print(power_mW); Serial.println(" mW");
-        Serial.println("");
+        //Serial.print("Bus Voltage:   "); Serial.print(busvoltage); Serial.println(" V");
+        //Serial.print("Shunt Voltage: "); Serial.print(shuntvoltage); Serial.println(" mV");
+        //Serial.print("Load Voltage:  "); Serial.print(loadvoltage); Serial.println(" V");
+        //Serial.print("Current:       "); Serial.print(current_mA); Serial.println(" mA");
+        //Serial.print("Power:         "); Serial.print(power_mW); Serial.println(" mW");
+        //Serial.println("");
 
-        delay(2000);
+
     #endif
     #if COMPASS_ENABLED
+        Serial.print("previousHeading: ");
+        Serial.print(previousHeading);
         currentHeading = getTrueHeading();
-        Serial.print("Heading: ");
+        Serial.print("\tcurrentHeading: ");
         Serial.println(currentHeading);
     #endif
 
-    // Serial is always enabled
-    recvOneChar();
-    showNewData();
-    #if MOTOR_DRIVER_ENABLED
-    switch (currentState) {
-        case CALIBRATE_COMPASS:
-            // loopCompassCalibration();
-            break;
-        case IDLE:
-            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_STOP);
-            
-            break;
-        case MOWING:
-            motorShield.changeDuty(MOTOR_CH_BOTH, 100);
-            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_CW);
-            break;
-        case TURN_LEFT:
-            motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_STOP);
-            motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_CW);
-            break;
-        case TURN_RIGHT:
-            motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_CW);
-            motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_STOP);
-            break;
-        case EMERG_STOP:
-            digitalWrite(BLADE_RELAY_PIN, LOW);
-            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_SHORT_BRAKE);
-            break;
-            
-    } // end switch
-    #endif
-}
-#if COMPASS_ENABLED
-float getTrueHeading() {
-    int trueX, trueY, trueZ;
-    int err = compass.readCorrected(&trueX, &trueY, &trueZ);
-    if (err) {
-        return err;
-    } else {
-        float azimuth = compass.azimuth(&trueY, &trueX);
-        azimuth = azimuth + magneticDeclination;
-        return azimuth;
+    // If any of these sensors should interrupt and trigger a state change, then update the currentState variable
+    if (leftDist > 0 && leftDist < 20) {
+        previousHeading = currentHeading;
+        currentState = TURN_RIGHT;
     }
-}
-#endif
-
-void recvOneChar() {
-    if (Serial.available() > 0) {
-        receivedChar = Serial.read();
-        newData = true;
+    if (rightDist > 0 && rightDist < 20) {
+        previousHeading = currentHeading;
+        currentState = TURN_LEFT;
     }
-}
-
-void showNewData() {
-    if (newData == true) {
+        
+        
+    if (newSerialData == true) {
         Serial.print("Received serial debug command: ");
         Serial.println(receivedChar);
         
@@ -330,10 +301,92 @@ void showNewData() {
                 currentState = EMERG_STOP;
                 break;
         }
+        newSerialData = false;
+    }    
         
-        newData = false;
+        
+    // Update outputs (motors, blade relay) based on current state    
+    #if MOTOR_DRIVER_ENABLED
+    switch (currentState) {
+        case CALIBRATE_COMPASS:
+            motorShield.changeDuty(MOTOR_CH_BOTH, 50);
+            motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_CW);
+            motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_CCW);
+            // loopCompassCalibration();
+            break;
+        case IDLE:
+            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_STOP);
+            Serial.println("LeftMotor: Stop\tRightMotor: Stop");
+            break;
+        case MOWING:
+            motorShield.changeDuty(MOTOR_CH_BOTH, 100);
+            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_CW);
+            Serial.println("LeftMotor: CW\tRightMotor: CW");
+            break;
+        case TURN_LEFT:
+            motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_STOP);
+            motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_CW);
+            Serial.println("LeftMotor: Stop\tRightMotor: CW");
+            break;
+        case TURN_RIGHT:
+            motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_CW);
+            motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_STOP);
+            Serial.println("LeftMotor: CW\tRightMotor: Stop");
+            break;
+        case EMERG_STOP:
+            digitalWrite(BLADE_RELAY_PIN, LOW);
+            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_SHORT_BRAKE);
+            Serial.println("LeftMotor: Brake\tRightMotor: Brake");
+            break;
+            
+    } // end switch
+    
+    #endif
+
+    // Process any exit conditions for the current state
+    switch (currentState) {
+        case TURN_LEFT:
+        case TURN_RIGHT:
+            if (differenceBetweenAngles(previousHeading, currentHeading) > 90) {
+                previousHeading = -1.0f;
+                currentState = MOWING;
+            }
+            break;
+    }
+    
+}
+
+
+
+#if COMPASS_ENABLED
+float getTrueHeading() {
+    int trueX, trueY, trueZ;
+    int err = compass.readCorrected(&trueX, &trueY, &trueZ);
+    if (err) {
+        return err;
+    } else {
+        float azimuth = compass.azimuth(&trueY, &trueX);
+        azimuth = azimuth + magneticDeclination;
+        return azimuth;
     }
 }
+float differenceBetweenAngles(float angle1, float angle2) {
+    float a = angle1 - angle2;
+    if (a > 180)
+        a -= 360;
+    if (a < -180)
+        a+= 360;
+    return abs(a);
+}
+#endif
+
+void recvOneChar() {
+    if (Serial.available() > 0) {
+        receivedChar = Serial.read();
+        newSerialData = true;
+    }
+}
+
 
 void i2cScan() {
     byte error, address;
@@ -351,18 +404,18 @@ void i2cScan() {
         error = Wire.endTransmission();
 
         if (error == 0) {
-            Serial.print("I2C device found at address 0x");
+            //Serial.print("I2C device found at address 0x");
             addresses[address] = true;
-            if (address < 16)
-                Serial.print("0");
-            Serial.println(address, HEX);
+            //if (address < 16)
+            //    Serial.print("0");
+            //Serial.println(address, HEX);
             nDevices++;
         } else if (error == 4) {
-            Serial.print("Unknown error at address 0x");
+            //Serial.print("Unknown error at address 0x");
             addresses[address] = false;
-            if (address < 16)
-                Serial.print("0");
-            Serial.println(address, HEX);
+            //if (address < 16)
+            //    Serial.print("0");
+            //Serial.println(address, HEX);
         } else {
             addresses[address] = false;
         }
@@ -372,23 +425,37 @@ void i2cScan() {
     } else {
         Serial.println("Finished scan.");
     }
-    #if MOTOR_DRIVER_ENABLED
-    if(!addresses[0x30])
-        Serial.println("ERROR: Motor driver enabled but not connected!");
-    #else
-        Serial.println("Warn: Motor driver found but not enabled.");
-    #endif
-    #if COMPASS_ENABLED
-    if(!addresses[0x0D])
-        Serial.println("ERROR: Compass enabled but not connected!");
-    #else
-        Serial.println("Warn: Compass found but not enabled.");
-    #endif
-    #if INA219_ENABLED
-    if(!addresses[0x40])
-        Serial.println("ERROR: INA219 enabled but not connected!");
-    #else
-        Serial.println("Warn: INA219 found but not enabled.");
-    #endif
-
+    if(addresses[0x30]) {
+        #if MOTOR_DRIVER_ENABLED
+            Serial.println("Info: Motor driver found and enabled.");
+        #else
+            Serial.println("Warn: Motor driver found but not enabled.");
+        #endif
+    } else {
+        #if MOTOR_DRIVER_ENABLED
+            Serial.println("ERROR: Motor driver enabled but not connected!");
+        #endif
+    }
+    if(addresses[0x0D]) {
+        #if COMPASS_ENABLED
+            Serial.println("Info: Compass found and enabled.");
+        #else
+            Serial.println("Warn: Compass found but not enabled.");
+        #endif
+    } else {
+        #if COMPASS_ENABLED
+            Serial.println("ERROR: Compass enabled but not connected!");
+        #endif
+    }
+    if(addresses[0x40]) {
+        #if INA219_ENABLED
+            Serial.println("Info: INA219 found and enabled.");
+        #else
+            Serial.println("Warn: INA219 found but not enabled.");
+        #endif
+    } else {
+        #if INA219_ENABLED
+            Serial.println("ERROR: INA219 enabled but not connected!");
+        #endif
+    }
 }
