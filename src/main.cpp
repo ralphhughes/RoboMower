@@ -1,21 +1,20 @@
 #include "Arduino.h"
-#include "ESP8266WiFi.h"
 
-
-// I2C
+// I2C is always loaded
 #include <Wire.h>   
 void i2cScan();
 
 // For testing when not everything is connected:
-#define COMPASS_ENABLED false
-#define INA219_ENABLED true
-#define MOTOR_DRIVER_ENABLED false
-#define SONAR_ENABLED false
+#define COMPASS_ENABLED true
+#define INA219_ENABLED false
+#define MOTOR_DRIVER_ENABLED true
+#define SONAR_ENABLED true
+#define WIFI_ENABLED true
 
 // I2C addresses:
 //    0x30    Dual motor driver
 //    0x0D    QMC5883L compass
-//    0x40?   INA219 current monitor
+//    0x40   INA219 current monitor
 //
 // MCU connections:
 //    Wemos_D1_Mini.A0 ->     Analogue
@@ -27,20 +26,39 @@ void i2cScan();
 //    Wemos_D1_Mini.D5 ->	BodyBumper (4 switches in series)
 //    Wemos_D1_Mini.D6 ->	RightSonar\RightBumper
 //    Wemos_D1_Mini.D7 ->	RightEncoder
-//    Wemos_D1_Mini.D8 ->     Trigger for Left+Right Sonar           (Ext pull down)
+//    Wemos_D1_Mini.D8 ->                                          (Ext pull down)
 //    Wemos_D1_Mini.TX ->     Serial debug
 //    Wemos_D1_Mini.RX ->     Serial debug
 int BLADE_RELAY_PIN = D0;
 int BODY_SWITCH_PIN = D5;
+int LEFT_SONAR_PIN = D3;
+int RIGHT_SONAR_PIN = D6;
 
 // State machine for mower functions
 enum STATES {
     CALIBRATE_COMPASS,
     IDLE,
     MOWING,
+    TURN_LEFT,
+    TURN_RIGHT,
     EMERG_STOP
 };
 int currentState;
+
+// Wifi
+#if WIFI_ENABLED
+    #include "ESP8266WiFi.h"
+    #include <WiFiClient.h>
+    #include <ESP8266WebServer.h>
+    #include <ESP8266mDNS.h>
+    #include "auth.h"
+
+    const char* ssid = SSID;    // From auth.h (gitignored)
+    const char* password = PSK; // From auth.h (gitignored)
+
+    ESP8266WebServer server(80);
+    
+#endif
 
 // Compass
 #if COMPASS_ENABLED
@@ -48,6 +66,8 @@ int currentState;
     MechaQMC5883 compass;
     float magneticDeclination;
     float getTrueHeading();
+    float currentHeading = -1.0f;
+    float previousHeading = -1.0f;
 #endif
     
 #if INA219_ENABLED
@@ -74,24 +94,59 @@ void showNewData();
 #if SONAR_ENABLED
     #include <NewPingESP8266.h>
     #define MAX_DISTANCE 200 // Maximum distance we want to ping for (in centimeters). Maximum sensor distance is rated at 400-500cm.
-    NewPingESP8266 leftSonar(D5, D7, MAX_DISTANCE); // trig, echo, max dist
-    NewPingESP8266 rightSonar(D5, D6, MAX_DISTANCE); // trig, echo, max dist
+    NewPingESP8266 leftSonar(LEFT_SONAR_PIN, LEFT_SONAR_PIN, MAX_DISTANCE); // trig, echo, max dist
+    NewPingESP8266 rightSonar(RIGHT_SONAR_PIN, RIGHT_SONAR_PIN, MAX_DISTANCE); // trig, echo, max dist
 #endif
 
 
 
 
 void setup() {
-    
     Serial.begin(74880); // baud chosen to match the boot status debug output of the ESP
-    Serial.println("Startup...");
+    Serial.print( F("\nStarting up...\nCode compiled: "));
+    Serial.print( F(__DATE__));
+    Serial.print( F(", "));
+    Serial.println( F(__TIME__));
 
+    // Startup I2C (has debug println statements in i2cscan)
+    Wire.begin();
+    i2cScan();    
+    
     Serial.print("MAC: ");
     Serial.println(WiFi.macAddress());
 
+    #if WIFI_ENABLED
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(ssid, password);
+        Serial.print("Connecting to AP");
 
-    Wire.begin();
-    i2cScan();
+        // Wait for connection
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(500);
+            Serial.print(".");
+        }
+        Serial.println("");
+        Serial.print("Connected to ");
+        Serial.println(ssid);
+        Serial.print("IP address: ");
+        Serial.println(WiFi.localIP());
+
+        if (MDNS.begin("esp8266")) {
+            Serial.println("MDNS responder started");
+        }
+
+
+        server.on("/", []() {
+            String message = "Status\n\n";
+            message += "currentState: "; message += currentState; message += "\n";
+            message += "currentHeading: "; message += currentHeading; message += "\n";
+            server.send(200, "text/plain", message);
+        });
+        
+        server.begin();
+        Serial.println("HTTP server started");
+    #endif
+
     
     // Start calibrate compass
     #if COMPASS_ENABLED
@@ -116,8 +171,10 @@ void setup() {
     // Start setup motor shield
     #if MOTOR_DRIVER_ENABLED
         while (motorShield.PRODUCT_ID != PRODUCT_ID_I2C_MOTOR) { //wait until motor shield ready.
-            Serial.print("motorShield: ");
-            Serial.println(motorShield.getInfo());
+            Serial.print("motorShield.getInfo(): ");
+            Serial.println(motorShield.getInfo()); // Coming back as 0 instead of 2, despite I2C detection?
+            Serial.print("Waiting for '2': ");
+            Serial.println(motorShield.PRODUCT_ID);
         }
         motorShield.changeFreq(MOTOR_CH_BOTH, 7500); //Change A & B 's Frequency to 7.5kHz to match NXT freq.
         pinMode(intPinMotorA, INPUT);
@@ -135,6 +192,11 @@ void setup() {
 
 void loop() {
     delay(200);
+    #if WIFI_ENABLED
+        server.handleClient();
+        MDNS.update();
+    #endif
+
     #if SONAR_ENABLED
         unsigned long leftDist = leftSonar.ping_cm();
         delay(29); // 29ms should be the shortest delay between pings.
@@ -145,12 +207,25 @@ void loop() {
         Serial.print(rightDist);
         Serial.println("cm");
 
-
+        
         if (leftDist > 0 && leftDist < 20) {
-            digitalWrite(D8, HIGH);
-        } else {
-            digitalWrite(D8, LOW);
+            if (currentState == MOWING) {
+                previousHeading = currentHeading;
+                currentState = TURN_RIGHT;
+            } else {
+                currentState = EMERG_STOP;
+            }
         }
+        if (rightDist > 0 && rightDist < 20) {
+            if (currentState == MOWING) {
+                previousHeading = currentHeading;
+                currentState = TURN_LEFT;
+            } else {
+                currentState = EMERG_STOP;
+            }
+        }
+        
+        
     #endif
     #if INA219_ENABLED
         float shuntvoltage = 0;
@@ -175,26 +250,42 @@ void loop() {
         delay(2000);
     #endif
     #if COMPASS_ENABLED
-        float heading = getTrueHeading();
+        currentHeading = getTrueHeading();
         Serial.print("Heading: ");
-        Serial.println(heading);
+        Serial.println(currentHeading);
     #endif
-    // Serial    
+
+    // Serial is always enabled
     recvOneChar();
     showNewData();
-    
+    #if MOTOR_DRIVER_ENABLED
     switch (currentState) {
         case CALIBRATE_COMPASS:
             // loopCompassCalibration();
             break;
         case IDLE:
-            //float heading = getTrueHeading();
-            //Serial.print("Heading: ");
-            //Serial.println(heading);
+            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_STOP);
+            
             break;
-
+        case MOWING:
+            motorShield.changeDuty(MOTOR_CH_BOTH, 100);
+            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_CW);
+            break;
+        case TURN_LEFT:
+            motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_STOP);
+            motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_CW);
+            break;
+        case TURN_RIGHT:
+            motorShield.changeStatus(MOTOR_CH_A, MOTOR_STATUS_CW);
+            motorShield.changeStatus(MOTOR_CH_B, MOTOR_STATUS_STOP);
+            break;
+        case EMERG_STOP:
+            digitalWrite(BLADE_RELAY_PIN, LOW);
+            motorShield.changeStatus(MOTOR_CH_BOTH, MOTOR_STATUS_SHORT_BRAKE);
+            break;
+            
     } // end switch
-
+    #endif
 }
 #if COMPASS_ENABLED
 float getTrueHeading() {
@@ -229,6 +320,15 @@ void showNewData() {
             case '1':
                 digitalWrite(BLADE_RELAY_PIN, HIGH);
                 break;
+            case 'm':
+                currentState = MOWING;
+                break;
+            case 'i':
+                currentState = IDLE;
+                break;
+            case ' ':
+                currentState = EMERG_STOP;
+                break;
         }
         
         newData = false;
@@ -242,6 +342,7 @@ void i2cScan() {
     Serial.println("Scanning i2c bus...");
 
     nDevices = 0;
+    bool addresses[127];
     for (address = 1; address < 127; address++) {
         // The i2c_scanner uses the return value of
         // the Write.endTransmission to see if
@@ -251,16 +352,19 @@ void i2cScan() {
 
         if (error == 0) {
             Serial.print("I2C device found at address 0x");
+            addresses[address] = true;
             if (address < 16)
                 Serial.print("0");
             Serial.println(address, HEX);
-
             nDevices++;
         } else if (error == 4) {
             Serial.print("Unknown error at address 0x");
+            addresses[address] = false;
             if (address < 16)
                 Serial.print("0");
             Serial.println(address, HEX);
+        } else {
+            addresses[address] = false;
         }
     }
     if (nDevices == 0) {
@@ -268,4 +372,23 @@ void i2cScan() {
     } else {
         Serial.println("Finished scan.");
     }
+    #if MOTOR_DRIVER_ENABLED
+    if(!addresses[0x30])
+        Serial.println("ERROR: Motor driver enabled but not connected!");
+    #else
+        Serial.println("Warn: Motor driver found but not enabled.");
+    #endif
+    #if COMPASS_ENABLED
+    if(!addresses[0x0D])
+        Serial.println("ERROR: Compass enabled but not connected!");
+    #else
+        Serial.println("Warn: Compass found but not enabled.");
+    #endif
+    #if INA219_ENABLED
+    if(!addresses[0x40])
+        Serial.println("ERROR: INA219 enabled but not connected!");
+    #else
+        Serial.println("Warn: INA219 found but not enabled.");
+    #endif
+
 }
